@@ -106,7 +106,7 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- (핵심 수정) 최종 품목 안정화 청소부 (Ver. 57) ---
+# --- 최종 품목 안정화 청소부 (Ver. 55) ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
@@ -115,10 +115,10 @@ def clean_item_name(name, junk_keywords):
     name = re.sub(r'([\d,.\s]+)+$', '', name).strip() 
     
     # [2] 코드/괄호 제거
-    name = re.sub(r'^\s*(\d{1,4}\s*)?', '', name).strip()
-    name = re.sub(r'\[.*?\]', '', name).strip()
-    name = re.sub(r'\(.*\)', '', name).strip()
-    name = re.sub(r'[가-힣]+\)\s*', '', name).strip()
+    name = re.sub(r'^\s*(\d{1,4}\s*)?', '', name).strip() # 예: '01 ' 제거
+    name = re.sub(r'\[.*?\]', '', name).strip() # 예: [10030541] 제거
+    name = re.sub(r'\(.*\)', '', name).strip() # 예: (1.6) 제거
+    name = re.sub(r'[가-힣]+\)\s*', '', name).strip() # 예: '칠성)' 제거
     
     # [3] 최종 특수문자 제거
     name = re.sub(r'[^가-힣A-Z0-9 -]', '', name)
@@ -126,14 +126,13 @@ def clean_item_name(name, junk_keywords):
     
     # [4] Junk 키워드 포함 시 탈락 (가장 먼저)
     if any(junk in name.upper() for junk in junk_keywords): return None
-
-    # [5] (핵심 추가) 영어 + 숫자 조합 제거 (상품 코드/빌 번호 등)
-    if re.search(r'[A-Za-z]+', name) and re.search(r'\d+', name):
-        return None
-        
-    # [6] 유효성 검사 (숫자만 있거나, 너무 짧거나)
-    if len(name) > 1 and not name.isdigit(): return name
-    return None
+    
+    # [5] 유효성 검사 (숫자만 있거나, 너무 짧거나)
+    if name.isdigit(): return None
+    name_check_pure = re.sub(r'[0-9-]', '', name) 
+    if len(name_check_pure) < 2: return None
+    
+    return name
 
 def parse_ocr_text(raw_text):
     """ 품목명만 추출하는 안정화 로직 (가격 추출 포기) """
@@ -147,28 +146,13 @@ def parse_ocr_text(raw_text):
         '고객용', '주문번호', '제품받는곳', '토스뱅크', '할부', '삼성페이', '신한카드', 'CATID',
         '멤버십', '포인트', '적립', '대상', '가용', '상품명', '단가', '수량', '코드', '거래일시',
         '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가', '이마트',
-        '판매', 'POS', 'PAY', '물품', 
-        # (핵심 추가) 사용자 요청 금지 단어
-        '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG', 'PAY',
-        '서울특별시', '경기도', 
-        # (핵심 추가) 패턴 기반 단어 필터링
-        'KB', 'IC', # 카드 종류
+        '판매', 'POS', 'PAY', '물품', '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG'
     ]
     items = set()
     lines = raw_text.split('\n')
     
-    # --- 지역명, 코드, 숫자 조합 패턴 필터링 ---
     for line in lines:
         line_cleaned_for_parsing = line.strip() 
-        
-        # 1. '-숫자-숫자' 조합을 가진 줄 제거 (전화번호, 사업자번호 등)
-        if re.search(r'\d+-\d+', line_cleaned_for_parsing):
-             continue
-             
-        # 2. 'xx시'로 시작하는 조합 제거 (주소)
-        if re.match(r'^\s*[가-힣]+시\s', line_cleaned_for_parsing):
-             continue
-
         cleaned_name = clean_item_name(line_cleaned_for_parsing, JUNK_KEYWORDS)
         
         if cleaned_name:
@@ -200,7 +184,7 @@ with st.sidebar:
         if manual_submitted and manual_item:
             save_item(manual_item, manual_location)
             st.success(f"'{manual_item}'을 {manual_location}에 저장했습니다.")
-            st.experimental_rerun() # 새로고침
+            st.rerun() # <-- 수정된 명령어 사용
 
 if uploaded_file is not None:
     img = Image.open(uploaded_file); max_width = 1024
@@ -228,7 +212,7 @@ if uploaded_file is not None:
 
 # --- 2단계: 분석된 항목 분류 ---
 if st.session_state.step == 2 and 'items_to_save' in st.session_state and st.session_state.items_to_save:
-    st.subheader("2. 분석된 항목을 분류해주세요 (무료모델의 한계로 잘못된 품목이 나옵니다, 선택안함으로 설정하세요. )")
+    st.subheader("2. 분석된 항목을 분류해주세요")
     with st.form(key="item_classification_form"):
         choices = {}
         for item_name in st.session_state.items_to_save:
@@ -241,7 +225,7 @@ if st.session_state.step == 2 and 'items_to_save' in st.session_state and st.ses
                     save_item(item_name, location); saved_count += 1
             st.success(f"총 {saved_count}개의 항목을 저장했습니다! ✅")
             st.session_state.step = 1; st.session_state.pop('raw_text', None); st.session_state.pop('items_to_save', None)
-            st.experimental_rerun() # 새로고침
+            st.rerun() # <-- 수정된 명령어 사용
 
 # --- 3단계: 재고 목록 및 삭제 기능 ---
 st.subheader("--- 🏠 현재 재고 현황 ---")
@@ -279,7 +263,7 @@ with col1:
                     # 가장 오래된(작은 ID) 항목 1개만 삭제하여 FIFO 구현 (선입선출)
                     oldest_id = min(item_details[item_name])
                     delete_item(oldest_id, "냉장고")
-                    st.experimental_rerun()
+                    st.rerun() # <-- 수정된 명령어 사용
 
 # --- 재고 목록 (창고) ---
 _, warehouse_items = get_inventory() # 창고 재고만 가져옴
@@ -311,7 +295,7 @@ with col2:
                 if st.button("사용", key=f"del_w_{item_name}"):
                     oldest_id = min(item_details[item_name])
                     delete_item(oldest_id, "창고")
-                    st.experimental_rerun()
+                    st.rerun() # <-- 수정된 명령어 사용
 
 # (디버깅용) 원본 텍스트 보기
 if 'raw_text' in st.session_state and st.session_state.raw_text:
