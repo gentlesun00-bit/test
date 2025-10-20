@@ -70,7 +70,7 @@ def delete_item(item_id, location):
     conn.close()
 
 def update_purchase_date(item_id, location, new_date_str):
-    """ 품목의 구매일을 수정합니다. (새로 추가된 기능) """
+    """ 품목의 구매일을 수정합니다. """
     target_table = "fridge" if location == "냉장고" else "warehouse"
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -117,7 +117,7 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- 최종 품목 안정화 청소부 (Ver. 55) ---
+# --- 최종 품목 안정화 청소부 (Ver. 61) ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
@@ -146,17 +146,18 @@ def clean_item_name(name, junk_keywords):
     return None
 
 def parse_ocr_text(raw_text):
-    """ 품목명만 추출하는 안정화 로직 (가격 추출 포기) """
+    """ 품목명만 추출하는 안정화 로직 (금지어 목록 복구) """
     JUNK_KEYWORDS = [
         '합계', '금액', '부가세', '면세', '과세', '물품가액', '과세물품가액', '면세물품가액', '봉투값',
         '할인', '결제', '승인', '카드', '현금', '영수증', '번호', '신용카드', '매출전표',
         '대표', '사업자', '주소', '전화', '매장', '본사', '점', '빌', 'MFY', 'SIDE',
         '감사합니다', '안녕히', '방문', '소계', '총', '구매액', '받을금액', '받은금액', '거스름돈',
         'TOTAL', 'TAX', 'VAT', 'CASH', 'CARD', 'PRICE', 'QTY', 'ITEM', 'SUBTOTAL', 'EAT-IN', 'INCL', 'ORD', 'CSO',
-        '다이소', '아성다이손', '국민가게', '하나로마트', '농협', 'ELEVEN', '세븐',
+        '다이소', '아성다이손', '국민가게', '하나로마트', '농협', 'ELEVEN', '세븐', 'emart',
         '고객용', '주문번호', '제품받는곳', '토스뱅크', '할부', '삼성페이', '신한카드', 'CATID',
         '멤버십', '포인트', '적립', '대상', '가용', '상품명', '단가', '수량', '코드', '거래일시',
-        '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가'
+        '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가', 
+        '이마트', '판매', 'POS', 'PAY', '물품', '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG'
     ]
     items = set()
     lines = raw_text.split('\n')
