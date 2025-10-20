@@ -158,7 +158,7 @@ def parse_ocr_text(raw_text):
         '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가', '이마트',
         # (핵심 추가) 사용자 요청 금지 단어
         '판매', 'POS', 'PAY', '물품', '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG',
-        '서울특별시', '경기도', '신세계'
+        '서울특별시', '경기도', '신세계', '상품'
     ]
     items = set()
     lines = raw_text.split('\n')
@@ -366,3 +366,4 @@ with col2:
 if 'raw_text' in st.session_state and st.session_state.raw_text:
     with st.expander("API가 반환한 원본 텍스트 보기 (디버깅용)"):
         st.text(st.session_state.raw_text)
+
