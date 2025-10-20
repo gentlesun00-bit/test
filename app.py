@@ -13,7 +13,7 @@ import io
 api_key = "K87046469388957" 
 # ------------------------------------------------
 
-# --- DB 관련 함수들 (최종 단순화) ---
+# --- DB 관련 함수들 ---
 DB_FILE = "my_inventory.db" 
 
 def setup_database():
@@ -70,7 +70,7 @@ def delete_item(item_id, location):
     conn.close()
 
 def update_purchase_date(item_id, location, new_date_str):
-    """ 품목의 구매일을 수정합니다. """
+    """ 품목의 구매일을 수정합니다. (버튼 클릭 시 오늘 날짜로 수정) """
     target_table = "fridge" if location == "냉장고" else "warehouse"
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -81,7 +81,6 @@ def update_purchase_date(item_id, location, new_date_str):
 def get_inventory():
     """ 냉장고와 창고의 모든 재고를 가져옵니다. """
     conn = sqlite3.connect(DB_FILE)
-    # id 컬럼을 포함하여 나중에 삭제할 때 사용할 수 있도록 함
     cursor_fridge = conn.execute("SELECT id, item_name, purchase_date FROM fridge ORDER BY id DESC")
     fridge_items = cursor_fridge.fetchall()
     cursor_warehouse = conn.execute("SELECT id, item_name, purchase_date FROM warehouse ORDER BY id DESC")
@@ -116,37 +115,25 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- 최종 품목 안정화 청소부 (금지어 목록 복구) ---
+# --- 최종 품목 안정화 청소부 (Ver. 55) ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
+    if any(junk in name.upper() for junk in junk_keywords): return None
     
-    # [1] 가격/수량 정보 제거 (맨 뒤의 모든 숫자/쉼표/점/공백 덩어리를 제거)
-    name = re.sub(r'([\d,.\s]+)+$', '', name).strip() 
-    
-    # [2] 코드/괄호 제거
     name = re.sub(r'^\s*(\d{1,4}\s*)?', '', name).strip()
     name = re.sub(r'\[.*?\]', '', name).strip()
     name = re.sub(r'\(.*\)', '', name).strip()
     name = re.sub(r'[가-힣]+\)\s*', '', name).strip()
     
-    # [3] 최종 특수문자 제거
     name = re.sub(r'[^가-힣A-Z0-9 -]', '', name)
     name = name.strip()
     
-    # [4] Junk 키워드 포함 시 탈락 (가장 먼저)
-    if any(junk in name.upper() for junk in junk_keywords): return None
-    
-    # [5] 유효성 검사 (숫자만 있거나, 너무 짧거나)
-    if name.isdigit(): return None
-    name_check_pure = re.sub(r'[0-9-]', '', name) 
-    if len(name_check_pure) < 2: return None 
-    
-    if len(name) > 1: return name
+    if len(name) > 1 and not name.isdigit(): return name
     return None
 
 def parse_ocr_text(raw_text):
-    """ 품목명만 추출하는 안정화 로직 (금지어 목록 복구) """
+    """ 품목명만 추출하는 안정화 로직 (가격 추출 포기) """
     # 사용자 요청에 따라 복구된 최종 금지어 목록
     JUNK_KEYWORDS = [
         '합계', '금액', '부가세', '면세', '과세', '물품가액', '과세물품가액', '면세물품가액', '봉투값',
@@ -165,7 +152,7 @@ def parse_ocr_text(raw_text):
     lines = raw_text.split('\n')
     
     for line in lines:
-        line_cleaned_for_parsing = line.strip() 
+        line_cleaned_for_parsing = re.sub(r'([\d,.\s]+)+$', '', line).strip() 
         cleaned_name = clean_item_name(line_cleaned_for_parsing, JUNK_KEYWORDS)
         
         if cleaned_name:
@@ -252,7 +239,6 @@ with col1:
     if not fridge_items:
         st.write("텅 비어있습니다.")
     else:
-        # (핵심: 품목 합치기 및 삭제/수정 로직)
         item_groups = {}
         for item in fridge_items:
             item_id, item_name, purchase_date = item[0], item[1], item[2]
@@ -271,39 +257,36 @@ with col1:
             # (핵심 수정) UI 압축: 폼 내부에 모든 것을 배치
             with st.form(key=f"item_form_f_{oldest_id}"):
                 
-                # 1. 품목명/개수/구매일 표시 (1줄)
-                st.write(f"- **{item_name}** ({count}개) - *{oldest_date_str} 구매*")
-                
-                # 2. 날짜 입력창 + 버튼 2개 (1줄)
-                col_date_input, col_use = st.columns([4, 1]) # 날짜 입력과 사용 버튼만 남김
-                
+                # 1. 품목명/개수/구매일 표시
+                col_name, col_date_input, col_use = st.columns([3, 4, 1.5]) 
+
+                with col_name:
+                    st.markdown(f"- **{item_name}** ({count}개)")
+
                 with col_date_input:
-                    # 날짜 수정 기능
+                    # 2. 날짜 수정 기능 (버튼 없이, 날짜 변경 감지)
                     new_date = st.date_input(
                         "구매일 수정:", 
                         value=datetime.strptime(oldest_date_str, "%Y-%m-%d").date(), 
                         min_value=datetime(2020, 1, 1).date(),
                         max_value=datetime.today().date(),
                         key=f"date_input_f_{oldest_id}",
-                        label_visibility="collapsed" # 레이블 숨김으로 공간 확보
+                        label_visibility="collapsed" # 레이블 숨김
                     )
                 
                 with col_use:
-                    # 삭제 버튼 (1개씩 차감)
+                    # 3. 삭제 버튼
                     if st.form_submit_button("사용 (차감)", help="가장 오래된 재고 1개를 제거합니다."):
                         delete_item(oldest_id, "냉장고")
                         st.success(f"'{item_name}' 1개가 재고에서 제거되었습니다.")
                         st.rerun()
-
-                # (추가) 날짜 입력창이 수정되었는지 확인하고, 수정 버튼 없이 자동 반영
-                # Streamlit의 FormSubmitButton으로 대체되었으므로, 별도 수정 버튼 불필요
-
-            # (추가) 날짜 입력창이 수정되었는지 확인하고, 수정 버튼 없이 자동 반영
-            if st.session_state.get(f"date_input_f_{oldest_id}") and \
-               st.session_state[f"date_input_f_{oldest_id}"].strftime("%Y-%m-%d") != oldest_date_str:
-                update_purchase_date(oldest_id, "냉장고", st.session_state[f"date_input_f_{oldest_id}"].strftime("%Y-%m-%d"))
-                st.info(f"'{item_name}' 날짜가 자동으로 수정되었습니다.")
-                st.rerun() # 자동 수정 후 새로고침
+                
+                # (추가) 날짜 입력창이 수정되었는지 확인하고, 폼 제출 후 자동 반영
+                if st.session_state.get(f"date_input_f_{oldest_id}") and \
+                   st.session_state[f"date_input_f_{oldest_id}"].strftime("%Y-%m-%d") != oldest_date_str:
+                    update_purchase_date(oldest_id, "냉장고", st.session_state[f"date_input_f_{oldest_id}"].strftime("%Y-%m-%d"))
+                    st.info(f"'{item_name}' 날짜가 자동으로 수정되었습니다.")
+                    st.rerun() # 자동 수정 후 새로고침
 
             st.markdown("---")
 
@@ -334,22 +317,24 @@ with col2:
             with st.form(key=f"item_form_w_{oldest_id}"):
                 
                 # 1. 품목명과 개수 표시
-                st.write(f"- **{item_name}** ({count}개) - *{oldest_date_str} 구매*")
+                col_name, col_date_input, col_use = st.columns([3, 4, 1.5]) 
                 
-                # 2. 날짜 입력창 + 버튼 2개 (1줄)
-                col_date_input, col_use = st.columns([4, 1])
+                with col_name:
+                    st.write(f"- **{item_name}** ({count}개)")
                 
                 with col_date_input:
+                    # 2. 날짜 수정 기능
                     new_date = st.date_input(
                         "구매일 수정:", 
                         value=datetime.strptime(oldest_date_str, "%Y-%m-%d").date(), 
                         min_value=datetime(2020, 1, 1).date(),
                         max_value=datetime.today().date(),
                         key=f"date_input_w_{oldest_id}",
-                        label_visibility="collapsed" # 레이블 숨김으로 공간 확보
+                        label_visibility="collapsed" # 레이블 숨김
                     )
                 
                 with col_use:
+                    # 3. 삭제 버튼
                     if st.form_submit_button("사용 (차감)", help="가장 오래된 재고 1개를 제거합니다."):
                         delete_item(oldest_id, "창고")
                         st.success(f"'{item_name}' 1개가 재고에서 제거되었습니다.")
@@ -363,6 +348,7 @@ with col2:
                 st.rerun() # 자동 수정 후 새로고침
 
             st.markdown("---")
+
 
 # (디버깅용) 원본 텍스트 보기
 if 'raw_text' in st.session_state and st.session_state.raw_text:
