@@ -70,9 +70,8 @@ def delete_item(item_id, location):
     conn.close()
 
 def get_inventory():
-    """ 냉장고와 창고의 모든 재고를 가져옵니다. (id 기준 오름차순으로 변경) """
+    """ 냉장고와 창고의 모든 재고를 가져옵니다. (id 기준 오름차순) """
     conn = sqlite3.connect(DB_FILE)
-    # (핵심 수정) ORDER BY id ASC: 먼저 들어온 순 (오래된 순)으로 정렬
     cursor_fridge = conn.execute("SELECT id, item_name, purchase_date FROM fridge ORDER BY id ASC")
     fridge_items = cursor_fridge.fetchall()
     cursor_warehouse = conn.execute("SELECT id, item_name, purchase_date FROM warehouse ORDER BY id ASC")
@@ -107,7 +106,7 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- (Ver. 57) 최종 품목 안정화 청소부 (금지어 목록 복구) ---
+# --- (핵심 수정) 최종 품목 안정화 청소부 (Ver. 65) ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
@@ -127,24 +126,21 @@ def clean_item_name(name, junk_keywords):
     
     # [4] Junk 키워드 포함 시 탈락 (가장 먼저)
     if any(junk in name.upper() for junk in junk_keywords): return None
-
-    # [5] (핵심 추가) 유효성 검사 (숫자+영어 혼합, 또는 숫자만 있는 경우 제거)
     
-    # A. 텍스트에 영어와 숫자가 혼합되어 있다면 탈락 (e.g., MFY SIDE 1, 20L)
+    # [5] (핵심 추가) 영어 + 숫자 조합 제거 (상품 코드/빌 번호 등)
     if re.search(r'[A-Za-z]+', name) and re.search(r'\d+', name):
         return None
-    
-    # [5] 유효성 검사 (숫자만 있거나, 너무 짧거나)
+        
+    # [6] 유효성 검사 (숫자만 있거나, 너무 짧거나)
     if name.isdigit(): return None
-    name_check_pure = re.sub(r'[0-9-]', '', name) 
+    name_check_pure = re.sub(r'[0-9-]', '', name) # 숫자, 하이픈 제거 후 남은 순수 텍스트
     if len(name_check_pure) < 2: return None 
     
     if len(name) > 1: return name
     return None
 
 def parse_ocr_text(raw_text):
-    """ 품목명만 추출하는 안정화 로직 (금지어 목록 복구) """
-    # 사용자 요청에 따라 복구된 최종 금지어 목록
+    """ 품목명만 추출하는 안정화 로직 (금지어/패턴 최종 복구) """
     JUNK_KEYWORDS = [
         '합계', '금액', '부가세', '면세', '과세', '물품가액', '과세물품가액', '면세물품가액', '봉투값',
         '할인', '결제', '승인', '카드', '현금', '영수증', '번호', '신용카드', '매출전표',
@@ -163,6 +159,17 @@ def parse_ocr_text(raw_text):
     
     for line in lines:
         line_cleaned_for_parsing = line.strip() 
+        
+        # --- (핵심 수정) 패턴 필터링 ---
+        # 1. '-숫자-숫자' 조합을 가진 줄 제거 (전화번호, 사업자번호 등)
+        if re.search(r'\d+-\d+', line_cleaned_for_parsing):
+             continue
+             
+        # 2. 'xx시'로 시작하는 조합 제거 (주소)
+        if re.match(r'^\s*[가-힣]{1,3}시\s', line_cleaned_for_parsing):
+             continue
+        # -----------------------------
+
         cleaned_name = clean_item_name(line_cleaned_for_parsing, JUNK_KEYWORDS)
         
         if cleaned_name:
@@ -184,7 +191,7 @@ if 'img_file_bytes' not in st.session_state: st.session_state.img_file_bytes = N
 
 uploaded_file = st.file_uploader("영수증 사진을 업로드하세요", type=["jpg", "png", "jpeg"])
 
-# --- (핵심 추가) 수동 추가 기능 (사이드바) ---
+# --- 수동 추가 기능 (사이드바) ---
 with st.sidebar:
     st.header("➕ 재고 수동 추가")
     with st.form("manual_add_form"):
