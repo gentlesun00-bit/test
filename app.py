@@ -13,14 +13,14 @@ import io
 api_key = "K87046469388957" 
 # ------------------------------------------------
 
-# --- DB 관련 함수들 ---
+# --- DB 관련 함수들 (최종 단순화) ---
 DB_FILE = "my_inventory.db" 
 
 def setup_database():
-    """ 가격, 유통기한 컬럼 없이 'purchase_date' 컬럼을 가진 구조로 안정화합니다. """
+    """ 가격 컬럼이 없는 안정적인 테이블 구조를 만듭니다. """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # 기존 테이블이 있다면 불필요한 컬럼 제거 (안정화)
+    # 안정적인 구조를 위해 기존 불필요한 컬럼 제거
     try: cursor.execute("ALTER TABLE fridge DROP COLUMN price")
     except: pass
     try: cursor.execute("ALTER TABLE warehouse DROP COLUMN price")
@@ -30,7 +30,7 @@ def setup_database():
     try: cursor.execute("ALTER TABLE warehouse DROP COLUMN expiry_date")
     except: pass
     
-    # 최종 테이블 구조 (purchase_date 포함)
+    # 가격, 유통기한이 없는 최종 테이블 구조
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS fridge (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +74,6 @@ def update_purchase_date(item_id, location, new_date_str):
     target_table = "fridge" if location == "냉장고" else "warehouse"
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # ID에 해당하는 항목의 purchase_date를 수정
     cursor.execute(f"UPDATE {target_table} SET purchase_date = ? WHERE id = ?", (new_date_str, item_id))
     conn.commit()
     conn.close()
@@ -82,7 +81,6 @@ def update_purchase_date(item_id, location, new_date_str):
 def get_inventory():
     """ 냉장고와 창고의 모든 재고를 가져옵니다. """
     conn = sqlite3.connect(DB_FILE)
-    # id, item_name, purchase_date 만 조회
     cursor_fridge = conn.execute("SELECT id, item_name, purchase_date FROM fridge ORDER BY id DESC")
     fridge_items = cursor_fridge.fetchall()
     cursor_warehouse = conn.execute("SELECT id, item_name, purchase_date FROM warehouse ORDER BY id DESC")
@@ -117,10 +115,11 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- 최종 품목 안정화 청소부 (Ver. 61) ---
+# --- 최종 품목 안정화 청소부 ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
+    if any(junk in name.upper() for junk in junk_keywords): return None
     
     # [1] 가격/수량 정보 제거 (맨 뒤의 모든 숫자/쉼표/점/공백 덩어리를 제거)
     name = re.sub(r'([\d,.\s]+)+$', '', name).strip() 
@@ -135,18 +134,16 @@ def clean_item_name(name, junk_keywords):
     name = re.sub(r'[^가-힣A-Z0-9 -]', '', name)
     name = name.strip()
     
-    # [4] Junk 키워드 포함 시 탈락 (가장 먼저)
-    if any(junk in name.upper() for junk in junk_keywords): return None
+    # [4] 유효성 검사 (숫자만 있거나, 너무 짧거나)
+    if name.isdigit(): return None
+    name_check_pure = re.sub(r'[0-9-]', '', name) 
+    if len(name_check_pure) < 2: return None 
     
-    # [5] 유효성 검사 (숫자만 있는 항목 최종 제거)
-    name_check_pure = re.sub(r'[0-9-]', '', name) # 숫자, 하이픈 제거 후 남은 순수 텍스트
-    if len(name_check_pure) < 2: return None # 1글자 이하 남으면 품목이 아님
-
     if len(name) > 1 and not name.isdigit(): return name
     return None
 
 def parse_ocr_text(raw_text):
-    """ 품목명만 추출하는 안정화 로직 (금지어 목록 복구) """
+    """ 품목명만 추출하는 안정화 로직 (가격 추출 포기) """
     JUNK_KEYWORDS = [
         '합계', '금액', '부가세', '면세', '과세', '물품가액', '과세물품가액', '면세물품가액', '봉투값',
         '할인', '결제', '승인', '카드', '현금', '영수증', '번호', '신용카드', '매출전표',
@@ -156,8 +153,8 @@ def parse_ocr_text(raw_text):
         '다이소', '아성다이손', '국민가게', '하나로마트', '농협', 'ELEVEN', '세븐', 'emart',
         '고객용', '주문번호', '제품받는곳', '토스뱅크', '할부', '삼성페이', '신한카드', 'CATID',
         '멤버십', '포인트', '적립', '대상', '가용', '상품명', '단가', '수량', '코드', '거래일시',
-        '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가', 
-        '이마트', '판매', 'POS', 'PAY', '물품', '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG'
+        '교환', '환불', '지참', '구입', '포장', '훼손', '불가', '취소', '소요', '샷 추가', '이마트',
+        '판매', 'POS', 'PAY', '물품', '변경', 'RPA', 'MB', '문의', '비자', '일시불', 'SCO', '고객', 'SSG'
     ]
     items = set()
     lines = raw_text.split('\n')
@@ -195,7 +192,7 @@ with st.sidebar:
         if manual_submitted and manual_item:
             save_item(manual_item, manual_location)
             st.success(f"'{manual_item}'을 {manual_location}에 저장했습니다.")
-            st.experimental_rerun() # 새로고침
+            st.rerun() # <-- 수정된 명령어 사용
 
 if uploaded_file is not None:
     img = Image.open(uploaded_file); max_width = 1024
@@ -214,7 +211,7 @@ if uploaded_file is not None:
             items_list = parse_ocr_text(raw_text) # 수정된 함수 사용
             st.session_state.items_to_save = items_list
             st.session_state.step = 2
-            st.rerun()
+            st.rerun() # <-- 수정된 명령어 사용
         elif raw_text == "":
              st.warning("영수증에서 텍스트를 감지했지만, 품목을 추출하지 못했습니다.")
         else:
@@ -236,7 +233,7 @@ if st.session_state.step == 2 and 'items_to_save' in st.session_state and st.ses
                     save_item(item_name, location); saved_count += 1
             st.success(f"총 {saved_count}개의 항목을 저장했습니다! ✅")
             st.session_state.step = 1; st.session_state.pop('raw_text', None); st.session_state.pop('items_to_save', None)
-            st.experimental_rerun() # 새로고침
+            st.rerun() # <-- 수정된 명령어 사용
 
 # --- 3단계: 재고 목록 및 삭제/날짜 수정 기능 ---
 st.subheader("--- 🏠 현재 재고 현황 ---")
@@ -275,7 +272,6 @@ with col1:
                 # 2. 날짜 수정 기능
                 new_date = st.date_input(
                     "구매일 수정:", 
-                    # DB에서 읽어온 문자열을 datetime.date 객체로 변환하여 기본값 설정
                     value=datetime.strptime(oldest_date_str, "%Y-%m-%d").date(), 
                     min_value=datetime(2020, 1, 1).date(),
                     max_value=datetime.today().date(),
@@ -288,12 +284,12 @@ with col1:
                 if col_update.form_submit_button("날짜 수정"):
                     update_purchase_date(oldest_id, "냉장고", new_date.strftime("%Y-%m-%d"))
                     st.success(f"'{item_name}'의 구매일이 {new_date.strftime('%Y-%m-%d')}로 수정되었습니다.")
-                    st.experimental_rerun()
+                    st.rerun() # <-- 수정된 명령어 사용
                 
                 if col_use.form_submit_button("사용 (1개 차감)"):
                     delete_item(oldest_id, "냉장고")
                     st.success(f"'{item_name}' 1개가 재고에서 제거되었습니다.")
-                    st.experimental_rerun()
+                    st.rerun() # <-- 수정된 명령어 사용
             st.markdown("---")
 
 # --- 재고 목록 (창고) ---
@@ -340,13 +336,12 @@ with col2:
                 if col_update.form_submit_button("날짜 수정"):
                     update_purchase_date(oldest_id, "창고", new_date.strftime("%Y-%m-%d"))
                     st.success(f"'{item_name}'의 구매일이 {new_date.strftime('%Y-%m-%d')}로 수정되었습니다.")
-                    st.experimental_rerun()
+                    st.rerun() # <-- 수정된 명령어 사용
                 
                 if col_use.form_submit_button("사용 (1개 차감)"):
                     delete_item(oldest_id, "창고")
                     st.success(f"'{item_name}' 1개가 재고에서 제거되었습니다.")
-                    st.experimental_rerun()
-            st.markdown("---")
+                    st.rerun() # <-- 수정된 명령어 사용
 
 # (디버깅용) 원본 텍스트 보기
 if 'raw_text' in st.session_state and st.session_state.raw_text:
