@@ -13,7 +13,7 @@ import io
 api_key = "K87046469388957" 
 # ------------------------------------------------
 
-# --- DB 관련 함수들 (최종 단순화) ---
+# --- DB 관련 함수들 ---
 DB_FILE = "my_inventory.db" 
 
 def setup_database():
@@ -69,6 +69,15 @@ def delete_item(item_id, location):
     conn.commit()
     conn.close()
 
+def update_purchase_date(item_id, location, new_date_str):
+    """ 품목의 구매일을 수정합니다. """
+    target_table = "fridge" if location == "냉장고" else "warehouse"
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE {target_table} SET purchase_date = ? WHERE id = ?", (new_date_str, item_id))
+    conn.commit()
+    conn.close()
+
 def get_inventory():
     """ 냉장고와 창고의 모든 재고를 가져옵니다. (id 기준 오름차순) """
     conn = sqlite3.connect(DB_FILE)
@@ -106,7 +115,7 @@ def ocr_space_file(filename, api_key):
         st.error(f"OCR API 호출 중 예외 발생: {e}")
         return None
 
-# --- (핵심 수정) 최종 품목 안정화 청소부 (Ver. 65) ---
+# --- 최종 품목 안정화 청소부 (금지어 목록 복구) ---
 def clean_item_name(name, junk_keywords):
     if name is None: return None
     name = name.strip()
@@ -127,20 +136,17 @@ def clean_item_name(name, junk_keywords):
     # [4] Junk 키워드 포함 시 탈락 (가장 먼저)
     if any(junk in name.upper() for junk in junk_keywords): return None
     
-    # [5] (핵심 추가) 영어 + 숫자 조합 제거 (상품 코드/빌 번호 등)
-    if re.search(r'[A-Za-z]+', name) and re.search(r'\d+', name):
-        return None
-        
-    # [6] 유효성 검사 (숫자만 있거나, 너무 짧거나)
+    # [5] 유효성 검사 (숫자만 있거나, 너무 짧거나)
     if name.isdigit(): return None
-    name_check_pure = re.sub(r'[0-9-]', '', name) # 숫자, 하이픈 제거 후 남은 순수 텍스트
+    name_check_pure = re.sub(r'[0-9-]', '', name) 
     if len(name_check_pure) < 2: return None 
     
     if len(name) > 1: return name
     return None
 
 def parse_ocr_text(raw_text):
-    """ 품목명만 추출하는 안정화 로직 (금지어/패턴 최종 복구) """
+    """ 품목명만 추출하는 안정화 로직 (금지어 목록 복구) """
+    # 사용자 요청에 따라 복구된 최종 금지어 목록
     JUNK_KEYWORDS = [
         '합계', '금액', '부가세', '면세', '과세', '물품가액', '과세물품가액', '면세물품가액', '봉투값',
         '할인', '결제', '승인', '카드', '현금', '영수증', '번호', '신용카드', '매출전표',
@@ -160,16 +166,10 @@ def parse_ocr_text(raw_text):
     for line in lines:
         line_cleaned_for_parsing = line.strip() 
         
-        # --- (핵심 수정) 패턴 필터링 ---
-        # 1. '-숫자-숫자' 조합을 가진 줄 제거 (전화번호, 사업자번호 등)
-        if re.search(r'\d+-\d+', line_cleaned_for_parsing):
-             continue
+        # (핵심 추가) 패턴 필터링
+        if re.search(r'\d+-\d+', line_cleaned_for_parsing): continue
+        if re.match(r'^\s*[가-힣]{1,3}시\s', line_cleaned_for_parsing): continue
              
-        # 2. 'xx시'로 시작하는 조합 제거 (주소)
-        if re.match(r'^\s*[가-힣]{1,3}시\s', line_cleaned_for_parsing):
-             continue
-        # -----------------------------
-
         cleaned_name = clean_item_name(line_cleaned_for_parsing, JUNK_KEYWORDS)
         
         if cleaned_name:
@@ -201,7 +201,7 @@ with st.sidebar:
         if manual_submitted and manual_item:
             save_item(manual_item, manual_location)
             st.success(f"'{manual_item}'을 {manual_location}에 저장했습니다.")
-            st.rerun() # 새로고침
+            st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
 
 if uploaded_file is not None:
     img = Image.open(uploaded_file); max_width = 1024
@@ -242,12 +242,11 @@ if st.session_state.step == 2 and 'items_to_save' in st.session_state and st.ses
                     save_item(item_name, location); saved_count += 1
             st.success(f"총 {saved_count}개의 항목을 저장했습니다! ✅")
             st.session_state.step = 1; st.session_state.pop('raw_text', None); st.session_state.pop('items_to_save', None)
-            st.rerun() # 새로고침
+            st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
 
 # --- 3단계: 재고 목록 및 삭제/날짜 수정 기능 (UI 압축) ---
 st.subheader("--- 🏠 현재 재고 현황 ---")
 
-# (핵심 추가) 재고 검색 기능
 search_term = st.text_input("🔍 재고 검색", placeholder="보유 중인 재고 검색...")
 
 col1, col2 = st.columns(2) 
@@ -259,48 +258,51 @@ with col1:
     if not fridge_items:
         st.write("텅 비어있습니다.")
     else:
-        # (핵심: 품목 합치기 로직)
         item_groups = {}
         for item in fridge_items:
             item_id, item_name, purchase_date = item[0], item[1], item[2]
-            
-            # (핵심 추가) 검색어 필터링
-            if search_term and search_term.lower() not in item_name.lower():
-                continue # 검색어가 있는데 품목명에 포함되지 않으면 건너뛰기
-                
+            if search_term and search_term.lower() not in item_name.lower(): continue
             if item_name not in item_groups:
                 item_groups[item_name] = {'count': 0, 'ids': [], 'dates': []}
             item_groups[item_name]['count'] += 1
             item_groups[item_name]['ids'].append(item_id)
             item_groups[item_name]['dates'].append(purchase_date)
 
-        # 그룹화된 품목 출력
         for item_name, data in item_groups.items():
             count = data['count']
             oldest_id = data['ids'][0] # 이미 오래된 순(ASC)으로 정렬됨
             oldest_date_str = data['dates'][0]
 
-            # (핵심 수정) UI 압축: 폼(Form) 대신 버튼만 사용
-            # 1. 품목명/개수/구매일 표시 (1줄)
-            st.write(f"- **{item_name}** ({count}개) - *{oldest_date_str} 구매*")
-            
-            # 2. 버튼 2개 (1줄)
-            col_add, col_use = st.columns(2) 
-            
-            # '1개 추가' 버튼
-            if col_add.button("➕ 1개 추가", key=f"add_f_{item_name}"):
-                save_item(item_name, "냉장고")
-                st.success(f"'{item_name}' 1개 추가 완료.")
-                st.rerun()
-            
-            # '1개 사용' 버튼
-            if col_use.button("➖ 1개 사용", key=f"del_f_{item_name}"):
-                delete_item(oldest_id, "냉장고")
-                st.success(f"'{item_name}' 1개 사용 완료.")
-                st.rerun()
-            
+            with st.form(key=f"item_form_f_{oldest_id}"):
+                
+                # 1. 품목명/개수/구매일 표시 (1줄)
+                st.write(f"- **{item_name}** ({count}개)")
+                
+                # 2. 날짜 입력창 + 버튼 2개 (1줄)
+                col_date_input, col_update, col_use = st.columns([3, 2, 2]) 
+                
+                with col_date_input:
+                    new_date = st.date_input(
+                        "구매일 수정:", 
+                        value=datetime.strptime(oldest_date_str, "%Y-%m-%d").date(), 
+                        min_value=datetime(2020, 1, 1).date(),
+                        max_value=datetime.today().date(),
+                        key=f"date_input_f_{oldest_id}",
+                        label_visibility="collapsed" # 레이블 숨김
+                    )
+                
+                with col_update:
+                    if st.form_submit_button("날짜 변경", help="가장 오래된 항목의 날짜를 수정합니다."):
+                        update_purchase_date(oldest_id, "냉장고", new_date.strftime("%Y-%m-%d"))
+                        st.success(f"'{item_name}' 날짜 변경 완료.")
+                        st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
+                
+                with col_use:
+                    if st.form_submit_button("사용 (차감)", help="가장 오래된 재고 1개를 제거합니다."):
+                        delete_item(oldest_id, "냉장고")
+                        st.success(f"'{item_name}' 1개 사용 완료.")
+                        st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
             st.markdown("---")
-
 
 # --- 재고 목록 (창고) ---
 _, warehouse_items = get_inventory() 
@@ -309,46 +311,48 @@ with col2:
     if not warehouse_items:
         st.write("텅 비어있습니다.")
     else:
-        # (핵심: 품목 합치기 로직)
         item_groups = {}
         for item in warehouse_items:
             item_id, item_name, purchase_date = item[0], item[1], item[2]
-            
-            # (핵심 추가) 검색어 필터링
-            if search_term and search_term.lower() not in item_name.lower():
-                continue # 검색어가 있는데 품목명에 포함되지 않으면 건너뛰기
-                
+            if search_term and search_term.lower() not in item_name.lower(): continue
             if item_name not in item_groups:
                 item_groups[item_name] = {'count': 0, 'ids': [], 'dates': []}
             item_groups[item_name]['count'] += 1
             item_groups[item_name]['ids'].append(item_id)
             item_groups[item_name]['dates'].append(purchase_date)
             
-        # 그룹화된 품목 출력
         for item_name, data in item_groups.items():
             count = data['count']
-            oldest_id = data['ids'][0] # 이미 오래된 순(ASC)으로 정렬됨
+            oldest_id = data['ids'][0]
             oldest_date_str = data['dates'][0]
 
-            # (핵심 수정) UI 압축: 폼(Form) 대신 버튼만 사용
-            # 1. 품목명/개수/구매일 표시 (1줄)
-            st.write(f"- **{item_name}** ({count}개) - *{oldest_date_str} 구매*")
-            
-            # 2. 버튼 2개 (1줄)
-            col_add, col_use = st.columns(2) 
-            
-            # '1개 추가' 버튼
-            if col_add.button("➕ 1개 추가", key=f"add_w_{item_name}"):
-                save_item(item_name, "창고")
-                st.success(f"'{item_name}' 1개 추가 완료.")
-                st.rerun()
-            
-            # '1개 사용' 버튼
-            if col_use.button("➖ 1개 사용", key=f"del_w_{item_name}"):
-                delete_item(oldest_id, "창고")
-                st.success(f"'{item_name}' 1개 사용 완료.")
-                st.rerun()
-            
+            with st.form(key=f"item_form_w_{oldest_id}"):
+                
+                st.write(f"- **{item_name}** ({count}개)")
+                
+                col_date_input, col_update, col_use = st.columns([3, 2, 2])
+                
+                with col_date_input:
+                    new_date = st.date_input(
+                        "구매일 수정:", 
+                        value=datetime.strptime(oldest_date_str, "%Y-%m-%d").date(), 
+                        min_value=datetime(2020, 1, 1).date(),
+                        max_value=datetime.today().date(),
+                        key=f"date_input_w_{oldest_id}",
+                        label_visibility="collapsed"
+                    )
+                
+                with col_update:
+                    if st.form_submit_button("날짜 변경", help="가장 오래된 항목의 날짜를 수정합니다."):
+                        update_purchase_date(oldest_id, "창고", new_date.strftime("%Y-%m-%d"))
+                        st.success(f"'{item_name}' 날짜 변경 완료.")
+                        st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
+                
+                with col_use:
+                    if st.form_submit_button("사용 (차감)", help="가장 오래된 재고 1개를 제거합니다."):
+                        delete_item(oldest_id, "창고")
+                        st.success(f"'{item_name}' 1개 사용 완료.")
+                        st.rerun() # (핵심 수정) st.experimental_rerun() -> st.rerun()
             st.markdown("---")
 
 # (디버깅용) 원본 텍스트 보기
