@@ -70,7 +70,7 @@ def delete_item(item_id, location):
     conn.close()
 
 def update_purchase_date(item_id, location, new_date_str):
-    """ 품목의 구매일을 수정합니다. (기능 복구) """
+    """ 품목의 구매일을 수정합니다. """
     target_table = "fridge" if location == "냉장고" else "warehouse"
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -284,13 +284,15 @@ with col1:
             item_groups[item_name]['ids'].append(item_id)
             item_groups[item_name]['dates'].append(purchase_date)
 
-        # 그룹화된 품목 출력
-        for item_name, data in item_groups.items():
+        # (핵심 수정) 날짜 오름차순으로 그룹 자체를 정렬
+        sorted_groups = sorted(item_groups.items(), key=lambda item: min(item[1]['dates']))
+
+        # 정렬된 그룹 출력
+        for item_name, data in sorted_groups:
             count = data['count']
             oldest_id = data['ids'][0] # 이미 오래된 순(ASC)으로 정렬됨
             oldest_date_str = data['dates'][0]
 
-            # (핵심 수정) UI 압축: 폼(Form) 사용 + 2줄 압축
             with st.form(key=f"item_form_f_{oldest_id}"):
                 
                 # 1. 품목명/개수/구매일 표시 (1줄)
@@ -349,7 +351,11 @@ with col2:
             item_groups[item_name]['ids'].append(item_id)
             item_groups[item_name]['dates'].append(purchase_date)
             
-        for item_name, data in item_groups.items():
+        # (핵심 수정) 날짜 오름차순으로 그룹 자체를 정렬
+        sorted_groups = sorted(item_groups.items(), key=lambda item: min(item[1]['dates']))
+
+        # 정렬된 그룹 출력
+        for item_name, data in sorted_groups:
             count = data['count']
             oldest_id = data['ids'][0]
             oldest_date_str = data['dates'][0]
