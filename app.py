@@ -130,6 +130,12 @@ def clean_item_name(name, junk_keywords):
     # [5] (핵심 추가 1) '숫자-숫자' 패턴 포함 시 탈락 (전화번호, 날짜 등)
     if re.search(r'\d+-\d+', name):
         return None
+
+    # [5] (핵심 추가) 유효성 검사 (숫자+영어 혼합, 또는 숫자만 있는 경우 제거)
+    
+    # A. 텍스트에 영어와 숫자가 혼합되어 있다면 탈락 (e.g., MFY SIDE 1, 20L)
+    if re.search(r'[A-Za-z]+', name) and re.search(r'\d+', name):
+        return None
     
     # [6] (핵심 추가 2) 'xx시'로 시작하는 주소 패턴 제거
     # '서울시', '부천시' 등 (앞의 1~3글자 한글 + 시)
@@ -366,6 +372,7 @@ with col2:
 if 'raw_text' in st.session_state and st.session_state.raw_text:
     with st.expander("API가 반환한 원본 텍스트 보기 (디버깅용)"):
         st.text(st.session_state.raw_text)
+
 
 
 
